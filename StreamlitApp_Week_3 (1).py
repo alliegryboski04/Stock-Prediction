@@ -61,13 +61,14 @@ MODEL_INFO = {
     "pipeline": 'finalized_model.tar.gz',
 
     # MUST match your notebook feature columns (order matters!)
-    "keys": ["GOOGL", "AMZN", "META", "DEXJPUS", "DEXUSUK", "SP500", "DJIA", "VIXCLS"],
 
+    "keys": ["GOOGL", "AMZN", "META", "DEXJPUS", "DEXUSUK", "DGS10", "FEDFUNDS", "UNRATE"],
     "inputs": [
-        {"name": k, "type": "number", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01}
-        for k in ["GOOGL", "AMZN", "META", "DEXJPUS", "DEXUSUK", "SP500", "DJIA", "VIXCLS"]
+        {"name": k, "type": "number", "min": -10.0, "max": 10.0, "default": 0.0, "step": 0.01}
+        for k in ["GOOGL", "AMZN", "META", "DEXJPUS", "DEXUSUK", "DGS10", "FEDFUNDS", "UNRATE"]
     ]
 }
+
 
 def load_pipeline(_session, bucket, key):
     s3_client = _session.client('s3')
@@ -156,6 +157,7 @@ if submitted:
         display_explanation(input_df, session, aws_bucket)
     else:
         st.error(res)
+
 
 
 
