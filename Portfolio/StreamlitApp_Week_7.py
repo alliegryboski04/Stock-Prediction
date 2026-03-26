@@ -17,9 +17,9 @@ from sagemaker.deserializers import JSONDeserializer
 from sagemaker.serializers import NumpySerializer
 from sagemaker.deserializers import NumpyDeserializer
 
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 import shap
-
+import importlib
 
 # Setup & Path Configuration
 warnings.simplefilter("ignore")
@@ -27,10 +27,11 @@ warnings.simplefilter("ignore")
 # Fix path for Streamlit Cloud (ensure 'src' is findable)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, '..'))
+
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.feature_utils import extract_features
+from src.feature_utils import extract_features_pair
 
 # Access the secrets
 aws_id = st.secrets["aws_credentials"]["AWS_ACCESS_KEY_ID"]
@@ -53,14 +54,14 @@ session = get_session(aws_id, aws_secret, aws_token)
 sm_session = sagemaker.Session(boto_session=session)
 
 # Data & Model Configuration
-df_features = extract_features()
+df_features = extract_features_pair()
 
 MODEL_INFO = {
         "endpoint": aws_endpoint,
-        "explainer": 'explainer.shap',
-        "pipeline": 'finalized_model.tar.gz',
-        "keys": ["GOOGL", "IBM", "DEXJPUS", "DEXUSUK", "SP500", "DJIA", "VIXCLS"],
-        "inputs": [{"name": k, "type": "number", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01} for k in ["GOOGL", "IBM", "DEXJPUS", "DEXUSUK", "SP500", "DJIA", "VIXCLS"]]
+        "explainer": 'explainer_pair.shap',
+        "pipeline": 'finalized_pair_model.tar.gz',
+        "keys": ["WMT", "AXON"],
+        "inputs": [{"name": k, "type": "number", "min": 0.0, "default": 0.0, "step": 10.0} for k in ["WMT", "AXON"]]
 }
 
 def load_pipeline(_session, bucket, key):
@@ -103,7 +104,9 @@ def call_model_api(input_df):
     try:
         raw_pred = predictor.predict(input_df)
         pred_val = pd.DataFrame(raw_pred).values[-1][0]
-        return round(float(pred_val), 4), 200
+        mapping = {-1: "SELL", 0: "HOLD", 1: "BUY"}
+        return mapping.get(pred_val, pred_val), 200
+        #return round(float(pred_val), 4), 200
     except Exception as e:
         return f"Error: {str(e)}", 500
 
@@ -111,13 +114,20 @@ def call_model_api(input_df):
 def display_explanation(input_df, session, aws_bucket):
     explainer_name = MODEL_INFO["explainer"]
     explainer = load_shap_explainer(session, aws_bucket, posixpath.join('explainer', explainer_name),os.path.join(tempfile.gettempdir(), explainer_name))
-    shap_values = explainer(input_df)
+
+    full_pipeline = load_pipeline(session, aws_bucket, 'sklearn-pipeline-deployment')
+    preprocessing_pipeline = Pipeline(steps=full_pipeline.steps[:-2])
+    input_df_transformed = preprocessing_pipeline.transform(input_df)
+    feature_names = full_pipeline[1:4].get_feature_names_out()
+    input_df_transformed = pd.DataFrame(input_df_transformed, columns=feature_names)
+    shap_values = explainer(input_df_transformed)
+
     st.subheader("🔍 Decision Transparency (SHAP)")
     fig, ax = plt.subplots(figsize=(10, 4))
-    shap.plots.waterfall(shap_values[0], max_display=10)
+    shap.plots.waterfall(shap_values[0, :, 0])
     st.pyplot(fig)
     # top feature   
-    top_feature = shap_values[0].feature_names[0]
+    top_feature = pd.Series(shap_values[0, :, 0].values, index=shap_values[0, :, 0].feature_names).abs().idxmax()
     st.info(f"**Business Insight:** The most influential factor in this decision was **{top_feature}**.")
 
 # Streamlit UI
@@ -133,7 +143,7 @@ with st.form("pred_form"):
         with cols[i % 2]:
             user_inputs[inp['name']] = st.number_input(
                 inp['name'].replace('_', ' ').upper(),
-                min_value=inp['min'], max_value=inp['max'], value=inp['default'], step=inp['step']
+                min_value=inp['min'], value=inp['default'], step=inp['step']
             )
     
     submitted = st.form_submit_button("Run Prediction")
@@ -151,5 +161,4 @@ if submitted:
         display_explanation(input_df,session, aws_bucket)
     else:
         st.error(res)
-
 
