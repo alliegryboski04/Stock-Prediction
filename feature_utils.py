@@ -32,7 +32,7 @@ def extract_features():
     Y = np.log(stk_data.loc[:, ('Adj Close', 'MSFT')]).diff(return_period).shift(-return_period)
     Y.name = Y.name[-1]+'_Future'
     
-    X1 = np.log(stk_data.loc[:, ('Adj Close', ('GOOGL', 'IBM'))]).diff(return_period)
+    X1 = np.log(stk_data.loc[:, ('Adj Close', ('WMT', 'AXON'))]).diff(return_period)
     X1.columns = X1.columns.droplevel()
     X2 = np.log(ccy_data).diff(return_period)
     X3 = np.log(idx_data).diff(return_period)
@@ -60,7 +60,7 @@ def extract_features_pair():
     Y = stk_data.loc[:, ('Adj Close', 'WMT')]
     Y.name = 'WMT'
 
-    X = stk_data.loc[:, ('Adj Close', 'HWM')]
+    X = stk_data.loc[:, ('Adj Close', 'AXON')]
     X.name = 'HWM'
 
     dataset = pd.concat([Y, X], axis=1).dropna()
