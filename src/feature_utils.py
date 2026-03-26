@@ -49,6 +49,27 @@ def extract_features():
     features = features.iloc[:,1:]
     return features
 
+def extract_features_pair():
+
+    START_DATE = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+    END_DATE = datetime.date.today().strftime("%Y-%m-%d")
+    stk_tickers = ['WMT', 'AXON']
+    
+    stk_data = yf.download(stk_tickers, start=START_DATE, end=END_DATE, auto_adjust=False)
+
+    Y = stk_data.loc[:, ('Adj Close', 'WMT')]
+    Y.name = 'WMT'
+
+    X = stk_data.loc[:, ('Adj Close', 'AXON')]
+    X.name = 'AXON'
+
+    dataset = pd.concat([Y, X], axis=1).dropna()
+    Y = dataset.loc[:, Y.name]
+    X = dataset.loc[:, X.name]
+    dataset.index.name = 'Date'
+    features = dataset.sort_index()
+    features = features.reset_index(drop=True)
+    return features
 
 def get_bitcoin_historical_prices(days = 60):
     
