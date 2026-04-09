@@ -57,7 +57,7 @@ MODEL_INFO = {
         "endpoint": aws_endpoint,
         "explainer": 'explainer_pca.shap', 
         "pipeline": 'finalized_pca_model.tar.gz', 
-        "keys": ["pca1","pca2"], 
+        "keys": ["ROC_30","RSI_10"], 
         "inputs": [{"name": k, "type": "number", "min": -100.0, "max": 100.0, "default": 0.0, "step": 10.0} for k in ["pca1","pca2"]] 
 }
 
