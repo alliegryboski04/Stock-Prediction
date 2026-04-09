@@ -101,7 +101,7 @@ def convert_input_pca_regression(request_body, request_content_type):
 
     if option == 2:
 
-        X = FeatureEngineer(windows=[10,15,30]).transform(dataset[[target]])
+        X = FeatureEngineer(windows=[5,10,15,20,30]).transform(dataset[[target]])
     
         techIndicator_1 = 'ROC_30'
         ROC_30 = json.loads(request_body)[techIndicator_1]
