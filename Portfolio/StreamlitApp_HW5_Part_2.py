@@ -58,7 +58,7 @@ MODEL_INFO = {
         "explainer": 'explainer_pca.shap', 
         "pipeline": 'finalized_pca_model.tar.gz', 
         "keys": ["ROC_30","RSI_10"], 
-        "inputs": [{"name": k, "type": "number", "min": -100.0, "max": 100.0, "default": 0.0, "step": 10.0} for k in ["pca1","pca2"]] 
+        "inputs": [{"name": k, "type": "number", "min": -100.0, "max": 100.0, "default": 0.0, "step": 10.0} for k in ["ROC_30","RSI_10"]] 
 }
 
 def load_pipeline(_session, bucket, key):
