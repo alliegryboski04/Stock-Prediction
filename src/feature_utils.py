@@ -95,32 +95,30 @@ def convert_input_pca_regression(request_body, request_content_type):
 
     dataset = pd.read_csv(file_path,index_col=0)
 
-    target = 'WMT'
+    target = 'MSFT'
 
     option = 2
 
     if option == 2:
 
-        X = FeatureEngineer(windows=[5,10,15,20,30]).transform(dataset[[target]])
+        X = FeatureEngineer(windows=[10,15]).transform(dataset[[target]])
     
-        techIndicator_1 = 'ROC_30'
-        ROC_30 = json.loads(request_body)[techIndicator_1]
-        techIndicator_2 = 'RSI_10'
-        RSI_10 = json.loads(request_body)[techIndicator_2]
-
-        X_valid = X[[techIndicator_1, techIndicator_2]].dropna()
+        techIndicator_1 = 'RSI_15'
+        RSI_15 = json.loads(request_body)[techIndicator_1]
+        techIndicator_2 = 'MOM_15'
+        MOM_15 = json.loads(request_body)[techIndicator_2]
 
         # Calculate the distance
         distances = np.sqrt(
-            (X_valid[techIndicator_1] - ROC_30)**2 + 
-            (X_valid[techIndicator_2] - RSI_10)**2
+            (X[techIndicator_1] - RSI_15)**2 + 
+            (X[techIndicator_2] - MOM_15)**2
         )
         
         closest_index = distances.idxmin()
-        closest_row = X.loc[[closest_index]].copy()
+        closest_row = X.loc[[closest_index]]
     
-        closest_row[techIndicator_1] = ROC_30
-        closest_row[techIndicator_2] = RSI_10
+        closest_row[techIndicator_1] = RSI_15
+        closest_row[techIndicator_2] = MOM_15
     
         return closest_row
     else:
@@ -150,5 +148,3 @@ def convert_input_pca_regression(request_body, request_content_type):
     
         return closest_row
     
-
-
