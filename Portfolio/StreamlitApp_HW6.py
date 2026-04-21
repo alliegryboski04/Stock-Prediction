@@ -63,8 +63,8 @@ MODEL_INFO = {
         "endpoint": aws_endpoint,
         "explainer": 'explainer_sentiment.shap',
         "pipeline": 'finalized_sentiment_model.tar.gz',
-        "keys": ['MSFT', 'JPM', 'ADBE', 'GOOG', 'AAPL'],
-        "inputs": [{"name": k, "type": "number", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01} for k in ['MSFT', 'JPM', 'ADBE', 'GOOG', 'AAPL']]
+        "keys": ['ADBE','MSFT','GOOG','sentiment_LSTM'],
+        "inputs": [{"name": k, "type": "number", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01} for k in ['ADBE','MSFT','GOOG','sentiment_LSTM']]
 }
 
 def load_pipeline(_session, bucket, key):
