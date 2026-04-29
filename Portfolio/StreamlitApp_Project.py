@@ -1,26 +1,27 @@
 import os
 import sys
 import warnings
-import tempfile
-import posixpath
 import json
+import __main__
 
+import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-import joblib
 import boto3
 import sagemaker
 from sagemaker.predictor import Predictor
 from sagemaker.serializers import JSONSerializer
 from sagemaker.deserializers import JSONDeserializer
+from sklearn.pipeline import Pipeline
 import shap
-import __main__
 
-# Setup
 warnings.simplefilter("ignore")
 
+# -----------------------------
+# Path setup
+# -----------------------------
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, ".."))
 if project_root not in sys.path:
@@ -28,10 +29,12 @@ if project_root not in sys.path:
 
 from src.Custom_Classes import LoanDataCleanerEngineer
 
-# Important for loading the model locally if it was pickled from notebook __main__
+# Important if the model was originally pickled from notebook __main__
 __main__.LoanDataCleanerEngineer = LoanDataCleanerEngineer
 
-# File paths
+# -----------------------------
+# Local artifact paths
+# -----------------------------
 portfolio_dir = os.path.join(project_root, "Portfolio")
 xtrain_path = os.path.join(portfolio_dir, "X_train.csv")
 model_path = os.path.join(portfolio_dir, "finalized_loan_model.joblib")
@@ -40,13 +43,20 @@ explainer_path = os.path.join(portfolio_dir, "explainer_loan.shap")
 dataset = pd.read_csv(xtrain_path)
 dataset = dataset.loc[:, ~dataset.columns.str.contains("^Unnamed")]
 
-# Secrets
+# -----------------------------
+# Streamlit page config
+# -----------------------------
+st.set_page_config(page_title="Loan Default Prediction", layout="wide")
+st.title("Loan Default Prediction")
+
+# -----------------------------
+# Secrets / AWS
+# -----------------------------
 aws_id = st.secrets["aws_credentials"]["AWS_ACCESS_KEY_ID"]
 aws_secret = st.secrets["aws_credentials"]["AWS_SECRET_ACCESS_KEY"]
 aws_token = st.secrets["aws_credentials"]["AWS_SESSION_TOKEN"]
 aws_endpoint = st.secrets["aws_credentials"]["AWS_ENDPOINT"]
 
-# AWS session
 @st.cache_resource
 def get_session():
     return boto3.Session(
@@ -59,12 +69,17 @@ def get_session():
 session = get_session()
 sm_session = sagemaker.Session(boto_session=session)
 
+# -----------------------------
 # App config
+# -----------------------------
 MODEL_INFO = {
     "endpoint": aws_endpoint,
     "keys": ["loan_amnt", "int_rate", "annual_inc", "dti", "fico_range_low"]
 }
 
+# -----------------------------
+# Endpoint call
+# -----------------------------
 def call_model_api(payload):
     predictor = Predictor(
         endpoint_name=MODEL_INFO["endpoint"],
@@ -83,11 +98,19 @@ def call_model_api(payload):
             pred_val = None
             prob_val = None
 
-        mapping = {0: "Fully Paid / Lower Risk", 1: "Charged Off / Higher Risk"}
+        mapping = {
+            0: "Fully Paid / Lower Risk",
+            1: "Charged Off / Higher Risk"
+        }
+
         return mapping.get(pred_val, str(raw_pred)), prob_val, 200
+
     except Exception as e:
         return f"Error: {str(e)}", None, 500
 
+# -----------------------------
+# Local SHAP explanation
+# -----------------------------
 def display_explanation(payload):
     if not os.path.exists(model_path):
         st.warning("Local model file not found.")
@@ -102,12 +125,12 @@ def display_explanation(payload):
 
     input_df = pd.DataFrame([payload])
 
-    # Drop final estimator for preprocessing only
-    preprocessing_pipeline = best_pipeline[:-1]
+    # Use only the steps before SMOTE and the model
+    preprocessing_pipeline = Pipeline(steps=best_pipeline.steps[:-2])
     input_df_transformed = preprocessing_pipeline.transform(input_df)
 
     try:
-        feature_names = best_pipeline[:-1].get_feature_names_out()
+        feature_names = preprocessing_pipeline.get_feature_names_out()
         input_df_transformed = pd.DataFrame(input_df_transformed, columns=feature_names)
     except Exception:
         input_df_transformed = pd.DataFrame(input_df_transformed)
@@ -133,13 +156,13 @@ def display_explanation(payload):
 
         st.pyplot(fig)
         st.info(f"Most influential feature: **{top_feature}**")
+
     except Exception as e:
         st.warning(f"Could not display SHAP waterfall plot: {e}")
 
+# -----------------------------
 # UI
-st.set_page_config(page_title="Loan Default Prediction", layout="wide")
-st.title("Loan Default Prediction")
-
+# -----------------------------
 with st.form("pred_form"):
     st.subheader("Applicant Inputs")
     cols = st.columns(2)
