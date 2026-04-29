@@ -1,247 +1,120 @@
-import pandas as pd
+
 import numpy as np
-import statsmodels.api as sm
+import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import PowerTransformer
-from scipy.stats import skew
-from gensim.models import Word2Vec
 
-
-
-class AutoPowerTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self, threshold=0.75):
-        self.threshold = threshold
-        self.skewed_cols = []
-        self.pt = PowerTransformer(method='yeo-johnson')
-
-    def fit(self, X, y=None):
-        if not isinstance(X, pd.DataFrame):
-            X = pd.DataFrame(X)
-        
-        # PROTECTION: Only look at columns that are actually numeric
-        # This prevents the step from ever seeing a categorical string
-        numeric_df = X.select_dtypes(include=[np.number])
-        
-        if numeric_df.empty:
-            return self
-
-        # Only calculate skewness for numeric columns
-        skewness = numeric_df.apply(lambda x: skew(x.dropna()))
-        self.skewed_cols = skewness[abs(skewness) > self.threshold].index.tolist()
-        
-        if self.skewed_cols:
-            self.pt.fit(X[self.skewed_cols])
-        return self
-
-    def transform(self, X):
-        X_copy = X.copy()
-        if not isinstance(X_copy, pd.DataFrame):
-            X_copy = pd.DataFrame(X_copy)
-            
-        if self.skewed_cols:
-            X_copy[self.skewed_cols] = self.pt.transform(X_copy[self.skewed_cols])
-        return X_copy
-
-
-
-class FeatureSelector(BaseEstimator, TransformerMixin):
-    def __init__(self, missing_threshold=0.3, corr_threshold=0.03, cardinality_threshold=0.9):
-        self.missing_threshold = missing_threshold
-        self.corr_threshold = corr_threshold
-        self.cardinality_threshold = cardinality_threshold # Ratio of unique values to total rows
-        self.features_to_keep = []
-
-    def fit(self, X, y=None):
-        if not isinstance(X, pd.DataFrame):
-            X = pd.DataFrame(X)
-        
-        # 1. Missing Values Filter
-        null_ratios = X.isnull().mean()
-        cols_low_missing = null_ratios[null_ratios <= self.missing_threshold].index.tolist()
-        X_filtered = X[cols_low_missing]
-
-        # 2. High Cardinality Filter (Only for Categorical/Object columns)
-        cat_cols = X_filtered.select_dtypes(exclude='number').columns
-        cols_to_drop = []
-        
-        for col in cat_cols:
-            uniqueness_ratio = X_filtered[col].nunique() / len(X_filtered)
-            if uniqueness_ratio > self.cardinality_threshold:
-                cols_to_drop.append(col)
-        
-        # Keep categoricals that are NOT high cardinality
-        remaining_cats = [c for c in cat_cols if c not in cols_to_drop]
-
-        # 3. Correlation Filter (Only for Numeric columns)
-        numeric_X = X_filtered.select_dtypes(include='number')
-        if y is not None and not numeric_X.empty:
-            temp_df = numeric_X.copy()
-            temp_df['target'] = y
-            correlations = temp_df.corr()['target'].abs().drop('target')
-            numeric_to_keep = correlations[correlations >= self.corr_threshold].index.tolist()
-        else:
-            numeric_to_keep = numeric_X.columns.tolist()
-
-        self.features_to_keep = numeric_to_keep + remaining_cats
-        return self
-
-    def transform(self, X):
-        if not isinstance(X, pd.DataFrame):
-            X = pd.DataFrame(X)
-        return X[self.features_to_keep]
-
-class FeatureEngineer(BaseEstimator, TransformerMixin):
-    
-    def __init__(self, windows=[5, 10, 20]):
-        """
-        Initialize with a list of windows. 
-        Example: FeatureEngineer(windows=[5, 14, 30])
-        """
-        self.windows = windows
+class LoanDataCleanerEngineer(BaseEstimator, TransformerMixin):
+    """
+    Deterministic cleaning + feature engineering for LendingClub default modeling.
+    Designed so the same logic can be reused in EDA, model training, tuning, and deployment.
+    """
+    def __init__(self):
+        self.percent_cols = ["int_rate", "revol_util"]
+        self.numeric_like_cols = [
+            "loan_amnt", "funded_amnt", "funded_amnt_inv", "installment",
+            "annual_inc", "dti", "delinq_2yrs", "inq_last_6mths",
+            "open_acc", "pub_rec", "revol_bal", "total_acc",
+            "pub_rec_bankruptcies", "fico_range_low", "fico_range_high"
+        ]
+        self.text_cols = ["grade", "sub_grade", "home_ownership", "verification_status", "purpose", "addr_state", "term"]
 
     def fit(self, X, y=None):
         return self
 
-    def transform(self, X):
-        # Handle input types
-        if isinstance(X, np.ndarray):
-            X_df = pd.DataFrame(X)
-        else:
-            X_df = X.copy()
+    def _clean_percentage(self, s):
+        return pd.to_numeric(
+            s.astype(str).str.replace("%", "", regex=False).replace(["nan", "None", ""], np.nan),
+            errors="coerce"
+        )
 
-        # Ensure we are working with a Series for rolling/diff operations
-        # squeeze() is used if X_df is a single-column DataFrame
-        data = X_df.squeeze()
-        X_out = pd.DataFrame(index=X_df.index)
-        
-        # Iterate through each window to create multi-scale features
-        for w in self.windows:
-            
-            # 1. Exponential Moving Average
-            X_out[f'EMA_{w}'] = data.ewm(span=w, min_periods=w).mean()
+    def _clean_term(self, s):
+        return pd.to_numeric(s.astype(str).str.extract(r"(\d+)", expand=False), errors="coerce")
 
-            # 2. Rate of Change
-            M = data.diff(w - 1)
-            N = data.shift(w - 1)
-            X_out[f'ROC_{w}'] = (M / N) * 100
-
-            # 3. Price Momentum
-            X_out[f'MOM_{w}'] = data.diff(w)
-
-            # 4. Relative Strength Index (RSI)
-            delta = data.diff()
-            u = pd.Series(np.where(delta > 0, delta, 0), index=delta.index)
-            d = pd.Series(np.where(delta < 0, -delta, 0), index=delta.index)
-            avg_gain = u.ewm(com=w - 1, adjust=False).mean()
-            avg_loss = d.ewm(com=w - 1, adjust=False).mean()
-            rs = avg_gain / avg_loss
-            X_out[f'RSI_{w}'] = 100 - (100 / (1 + rs))
-            
-            # 5. Simple Moving Average
-            X_out[f'MA_{w}'] = data.rolling(w, min_periods=w).mean()
-
-            # 6. Oscillators
-
-        return X_out
-
-class PairFeatureEngineer(BaseEstimator, TransformerMixin):
-    def __init__(self, window=60):
-        self.window = window
-        # Internal state
-        self.last_beta_ = None
-        self.last_alpha_ = None
-        self.is_fitted_ = False
-
-    def fit(self, X, y=None):
-        """
-        Validates that the input data is sufficient for the window size.
-        In scikit-learn, fit must always return self.
-        """
-        if len(X) < self.window:
-            raise ValueError(f"Data length {len(X)} is less than window size {self.window}")
-        
-        self.is_fitted_ = True
-        return self
+    def _clean_emp_length(self, s):
+        cleaned = (
+            s.astype(str)
+             .str.lower()
+             .str.replace(r"\+ years", "", regex=True)
+             .str.replace(r"years?", "", regex=True)
+             .str.replace(r"<\s*1", "0", regex=True)
+             .str.replace(r"[^0-9]", "", regex=True)
+             .replace("", np.nan)
+        )
+        return pd.to_numeric(cleaned, errors="coerce")
 
     def transform(self, X):
-        """
-        X: Expected to be a DataFrame or Array with 2 columns: [Price_A, Price_B]
-        """
-        if not self.is_fitted_:
-            raise RuntimeError("Extractor must be fitted before calling transform.")
+        X = X.copy()
 
-        # Convert to DataFrame if input is a numpy array
-        if isinstance(X, np.ndarray):
-            df = pd.DataFrame(X, columns=['price_a', 'price_b'])
-        else:
-            df = X.copy()
-            df.columns = ['price_a', 'price_b']
-        
-        # 1. Compute Rolling Spread and Beta
-        df[['spread', 'beta']] = self._compute_rolling_regression(df)
+        # 1) Clean percentage columns
+        for col in self.percent_cols:
+            if col in X.columns:
+                X[col] = self._clean_percentage(X[col])
 
-        # 2. Derive Statistics-based Features
-        df['z_score'] = self._calculate_z_score(df['spread'])
-        df['spread_std'] = df['spread'].rolling(self.window).std()
-        df['beta_stability'] = df['beta'].rolling(self.window).std()
+        # 2) Clean term
+        if "term" in X.columns:
+            X["term"] = self._clean_term(X["term"])
 
-        
-        return df#.dropna()
+        # 3) Clean employment length
+        if "emp_length" in X.columns:
+            X["emp_length"] = self._clean_emp_length(X["emp_length"])
 
-    def _compute_rolling_regression(self, df):
-        spreads = np.full(len(df), np.nan)
-        betas = np.full(len(df), np.nan)
-        
-        a_vals = df['price_a'].values
-        b_vals = df['price_b'].values
+        # 4) Parse dates
+        for col in ["issue_d", "earliest_cr_line"]:
+            if col in X.columns:
+                X[col] = pd.to_datetime(X[col], format="%b-%Y", errors="coerce")
 
-        for i in range(self.window, len(df)):
-            y = a_vals[i-self.window:i]
-            x = b_vals[i-self.window:i]
-            x_with_const = sm.add_constant(x)
-            
-            model = sm.OLS(y, x_with_const).fit()
-            
-            alpha, beta = model.params[0], model.params[1]
-            betas[i] = beta
-            spreads[i] = a_vals[i] - (beta * b_vals[i] + alpha)
-            
-            # Update state for live prediction tracking
-            self.last_alpha_, self.last_beta_ = alpha, beta
-            
-        return pd.DataFrame({'spread': spreads, 'beta': betas}, index=df.index)
+        # 5) Standardize categorical text
+        for col in [c for c in self.text_cols if c in X.columns]:
+            X[col] = X[col].astype(str).str.strip().str.upper().replace({"NAN": np.nan, "NONE": np.nan})
 
-    def _calculate_z_score(self, spread_series):
-        rolling_mean = spread_series.rolling(self.window).mean()
-        rolling_std = spread_series.rolling(self.window).std()
-        return (spread_series - rolling_mean) / rolling_std
+        # 6) Coerce numeric-like columns
+        for col in [c for c in self.numeric_like_cols if c in X.columns]:
+            X[col] = pd.to_numeric(X[col], errors="coerce")
 
-class Word2VecTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self, vector_size=100, window=5, min_count=1):
-        self.vector_size = vector_size
-        self.window = window
-        self.min_count = min_count
-        self.model = None
+        # -------- Feature engineering --------
+        if {"fico_range_low", "fico_range_high"}.issubset(X.columns):
+            X["fico_avg"] = (X["fico_range_low"] + X["fico_range_high"]) / 2
 
-    def fit(self, X, y=None):
-        # create the word2vec model
-        sentences = [str(row[0]).split() for row in X]
-        self.model = Word2Vec(sentences, vector_size=self.vector_size, 
-                              window=self.window, min_count=self.min_count)
-        return self
+        if {"annual_inc", "loan_amnt"}.issubset(X.columns):
+            X["income_to_loan_ratio"] = X["annual_inc"] / X["loan_amnt"].replace(0, np.nan)
 
-    def transform(self, X):
-        # Convert each headline into the average of its word vectors
-        def get_mean_vector(text):
-            words = str(text).split()
-            # Filter words that actually exist in the Word2Vec vocabulary
-            vectors = [self.model.wv[w] for w in words if w in self.model.wv]
-            if not vectors:
-                return np.zeros(self.vector_size)
-            return np.mean(vectors, axis=0)
+        if {"installment", "annual_inc"}.issubset(X.columns):
+            X["installment_to_income_ratio"] = (12 * X["installment"]) / X["annual_inc"].replace(0, np.nan)
 
-        return np.array([get_mean_vector(row[0]) for row in X])
+        if {"revol_bal", "annual_inc"}.issubset(X.columns):
+            X["revol_bal_to_income_ratio"] = X["revol_bal"] / X["annual_inc"].replace(0, np.nan)
 
-# --- Usage Example ---
-# extractor = PairFeatureExtractor(window=60)
-# features_df = extractor.transform(data['AAPL'], data['MSFT'])
+        if {"issue_d", "earliest_cr_line"}.issubset(X.columns):
+            X["credit_history_months"] = (X["issue_d"] - X["earliest_cr_line"]).dt.days / 30.44
+
+        if {"open_acc", "total_acc"}.issubset(X.columns):
+            X["open_acc_to_total_acc_ratio"] = X["open_acc"] / X["total_acc"].replace(0, np.nan)
+
+        if {"inq_last_6mths", "credit_history_months"}.issubset(X.columns):
+            X["inq_per_credit_year"] = 12 * X["inq_last_6mths"] / X["credit_history_months"].replace(0, np.nan)
+
+        if {"delinq_2yrs", "total_acc"}.issubset(X.columns):
+            X["delinq_to_total_acc_ratio"] = X["delinq_2yrs"] / X["total_acc"].replace(0, np.nan)
+
+        if "pub_rec_bankruptcies" in X.columns:
+            X["pubrec_bankruptcies_flag"] = (X["pub_rec_bankruptcies"].fillna(0) > 0).astype(int)
+
+        if "verification_status" in X.columns:
+            X["verified_income_flag"] = X["verification_status"].isin(["VERIFIED", "SOURCE VERIFIED"]).astype(int)
+
+        if "home_ownership" in X.columns:
+            X["mortgage_or_own_flag"] = X["home_ownership"].isin(["MORTGAGE", "OWN"]).astype(int)
+
+        if "annual_inc" in X.columns:
+            X["log_annual_inc"] = np.log1p(X["annual_inc"].clip(lower=0))
+
+        if "revol_bal" in X.columns:
+            X["log_revol_bal"] = np.log1p(X["revol_bal"].clip(lower=0))
+
+        # 7) Replace inf values
+        X = X.replace([np.inf, -np.inf], np.nan)
+
+        # 8) Drop raw dates after engineering
+        X = X.drop(columns=[c for c in ["issue_d", "earliest_cr_line"] if c in X.columns], errors="ignore")
+
+        return X
